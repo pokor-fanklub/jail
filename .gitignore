@@ -1,0 +1,8 @@
+.vscode/
+
+CMakeFiles/
+CMakeCache.txt
+*.cmake
+*Makefile
+
+wa-jail
