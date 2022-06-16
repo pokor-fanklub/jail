@@ -15,7 +15,7 @@ int main(int argc, char* argv[]) {
     printHelp(argv[0]);
     perf.attach();
     jail::Seccomp scmp(jail::Seccomp::STRICT);
-    jail::Runner runner("/home/piotro/wa-jail/rusty/test", {"arg"}, scmp);
+    jail::Runner runner("/home/piotro/wa-jail/rusty/test", {"arg"}, perf, scmp);
     runner.run();
     std::cout<<perf.readInstructions()<<'\n';
 }

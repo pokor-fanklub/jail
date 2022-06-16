@@ -1,5 +1,6 @@
 #include "runner.h"
 #include "log.h"
+#include "timelimit.h"
 
 #include <iostream>
 #include <sys/wait.h>
@@ -27,7 +28,7 @@ void Runner::run() {
 }
 
 void Runner::forkChild() {
-        assert(ptrace(PTRACE_TRACEME,0,0,0) >= 0);
+    assert(ptrace(PTRACE_TRACEME,0,0,0) >= 0);
     const char* c_argv[Runner::exec_args.size()+2];
     c_argv[0] = Runner::exec_name.c_str();
     for(size_t i = 0; i < Runner::exec_args.size(); i++)
@@ -44,6 +45,10 @@ void Runner::forkChild() {
 void Runner::forkMonitor() {
     int wait_s;
 
+    // setup TimeLimit
+    TimeLimit time_limit(Runner::child_pid, 1000000000, Runner::perf);
+    std::thread time_limit_thread = time_limit.attach();
+
     // initial stop from PTRACE_TRACEME
     pid_t rc = waitpid(Runner::child_pid, &wait_s, 0);
     if(rc < 0 || WIFSTOPPED(wait_s) != 1)
@@ -57,22 +62,23 @@ void Runner::forkMonitor() {
         jail::panic("initial ptrace_cont failed");
     std::cout<<"resuming after initial stop\n";
 
-   for(;;) {
-       pid_t rc = waitpid(Runner::child_pid, &wait_s, 0);
-       if(rc < 0)
+    for(;;) {
+        pid_t rc = waitpid(Runner::child_pid, &wait_s, 0);
+        if(rc < 0)
             jail::panic("wait failed");
-        
+            
         std::cout<<"wait status exit:"<<WIFEXITED(wait_s)<<" sig:"<<WIFSIGNALED(wait_s)<<" stop:"<<WIFSTOPPED(wait_s)<<'\n';
         std::cout<<"codes s"<<WSTOPSIG(wait_s)<<" t"<<WTERMSIG(wait_s)<<'\n';
 
-        // both of those singals are final (kill) and don't allow PTRACE_CONT
+        // both of those are terminating signals and don't allow PTRACE_CONT
         if(WIFEXITED(wait_s) || WIFSIGNALED(wait_s)) {
             if(WIFSIGNALED(wait_s))
                 std::cout<<"killed by singal!\n";
+            else
+                std::cout<<"exited normally\n";
             break;
         }
             
-
         user_regs_struct uregs;
         long ret = ptrace(PTRACE_GETREGS, Runner::child_pid, 0, &uregs); // this is not available when exit status is set
         if(ret < 0)
@@ -81,9 +87,16 @@ void Runner::forkMonitor() {
 
         ret = ptrace(PTRACE_CONT, Runner::child_pid, 0, 0);
         if(ret < 0)
-            jail::panic("ptrace_cont failed");        
-   }
-   std::cout<<"exited with code: "<<WEXITSTATUS(wait_s)<<'\n';
+            jail::panic("ptrace_cont failed");
+    }
+    std::cout<<"exited with code: "<<WEXITSTATUS(wait_s)<<'\n';
+
+    time_limit_thread.detach(); // detach timelimt thread to finish on its own
+    
+    if(time_limit.get_killed())
+        std::cout<<"killed by tlthread\n";
+    if(!time_limit.verify())
+        std::cout<<"tle\n";
 }
 
 };

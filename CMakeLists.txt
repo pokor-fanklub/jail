@@ -10,6 +10,7 @@ set(sources ${sources}
     src/perf.cpp
     src/runner.cpp
     src/seccomp.cpp
+    src/timelimit.cpp
 )
 
 add_executable(wa-jail ${sources})
