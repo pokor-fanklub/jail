@@ -11,6 +11,15 @@
 
 #include <syscall.h>
 
+static pid_t sighandler_kill_pid;
+void sigint_handler(int signo) {
+    std::cout<<" Recived termination signal. Killing child process\n";
+    int pid = sighandler_kill_pid;
+    if(kill(pid, 0) == 0)
+        kill(pid, SIGKILL);
+    jail::panic("Interrupted");
+}
+
 namespace jail {
 
 void Runner::run() {
@@ -46,6 +55,15 @@ void Runner::forkedChild() {
 void Runner::forkedMonitor() {
     int wait_s;
 
+    // register sigproc
+    sighandler_kill_pid = Runner::child_pid;
+    struct sigaction sigact;
+    sigact.sa_handler = sigint_handler;
+    sigemptyset(&sigact.sa_mask);
+    sigact.sa_flags = 0;
+    sigaction(SIGINT, &sigact, NULL);
+    sigaction(SIGTERM, &sigact, NULL);
+    
     // setup TimeLimit
     TimeLimit time_limit(Runner::child_pid, 1000000000000000, Runner::perf);
     std::thread time_limit_thread = time_limit.attach();
@@ -77,6 +95,9 @@ void Runner::forkedMonitor() {
     nrl = {0,0};
     rcx = prlimit64(Runner::child_pid, RLIMIT_MEMLOCK,&nrl, nullptr);
     rcx = prlimit64(Runner::child_pid, RLIMIT_NPROC,&nrl, nullptr);
+    // set real time limit in case of process block/pause
+    nrl = {10, 10};
+    rcx = prlimit64(Runner::child_pid, RLIMIT_CPU, &nrl, nullptr);
     
     rc = ptrace(PTRACE_CONT, Runner::child_pid, 0, 0);
     if(rc < 0)
@@ -93,7 +114,7 @@ void Runner::forkedMonitor() {
 
         rusage ru;
         getrusage(RUSAGE_CHILDREN, &ru);
-        std::cout<<"rusage"<<ru.ru_maxrss*1024<<"\n";
+        std::cout<<"rusage"<<ru.ru_maxrss*1024<<" realruntime"<<ru.ru_utime.tv_sec+ru.ru_stime.tv_sec<<"\n";
 
         // both of those are terminating signals and don't allow PTRACE_CONT
         if(WIFEXITED(wait_s) || WIFSIGNALED(wait_s)) {
@@ -110,12 +131,17 @@ void Runner::forkedMonitor() {
             jail::panic("ptrace_getregs failed");
         std::cerr<<"regs: rax="<<uregs.rax<<" orax="<<uregs.orig_rax<<" rip(pc)="<<uregs.rip<<'\n';
         
-        // FIXME: PASS SIGNAL
         ret = ptrace(PTRACE_CONT, Runner::child_pid, 0, WSTOPSIG(wait_s));
         if(ret < 0)
             jail::panic("ptrace_cont failed");
     }
     std::cout<<"exited with code: "<<WEXITSTATUS(wait_s)<<'\n';
+
+    sigact.sa_handler = SIG_DFL;
+    sigemptyset(&sigact.sa_mask);
+    sigact.sa_flags = 0;
+    sigaction(SIGINT, &sigact, NULL);
+    sigaction(SIGTERM, &sigact, NULL);
 
     time_limit_thread.detach(); // detach timelimt thread to finish on its own
     
