@@ -34,7 +34,18 @@ void Seccomp::attach() {
             SYS_read,
             SYS_write,
             SYS_open,
-            SYS_close
+            SYS_close,
+            SYS_uname,
+            SYS_prlimit64,
+            SYS_readlink,
+            SYS_getrandom,
+            SYS_exit_group,
+            SYS_rt_sigprocmask,
+            SYS_gettid,
+            SYS_getpid,
+            SYS_tgkill,
+            SYS_rt_sigaction,
+            SYS_futex
         },
         SCMP_ACT_ALLOW);
 

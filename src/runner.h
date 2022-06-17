@@ -16,8 +16,8 @@ class Runner {
 
         void run();
     private:
-        void forkChild();
-        void forkMonitor();
+        void forkedChild();
+        void forkedMonitor();
         
         pid_t child_pid;
         std::string exec_name;
