@@ -15,7 +15,8 @@ int main(int argc, char* argv[]) {
     printHelp(argv[0]);
     perf.attach();
     jail::Seccomp scmp(jail::Seccomp::STRICT);
-    jail::Runner runner("/home/piotro/wa-jail/test/tle.test", {"arg"}, perf, scmp);
+    limits default_limits;
+    jail::Runner runner("/home/piotro/wa-jail/test/tle.test", {"arg"}, default_limits, perf, scmp);
     runner.run();
     std::cout<<perf.readInstructions()<<'\n';
 }

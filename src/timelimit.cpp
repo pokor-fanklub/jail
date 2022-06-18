@@ -13,21 +13,29 @@ std::thread TimeLimit::attach() {
 }
 
 void TimeLimit::thread_loop() {
+    real_time_start = time(nullptr);
     for (;;) {
         std::this_thread::sleep_for(std::chrono::milliseconds(SAMPLING_MS));
         
         if (kill(limited_pid, 0)) // check if process is still alive
             return;
 
-        if (!verify()) {
-            killed = true;
+        if (!verify_insn_limit()) {
+            killed = INSTR_LIM_EXCD;
+            kill(limited_pid, SIGKILL);
+            return;
+        }
+
+        // real time limit is only used as emergency limit, if process manages to block (and not increment instructions)
+        if(time(nullptr) - real_time_start > real_time_limit) {
+            killed = REAL_TIME_EXCD;
             kill(limited_pid, SIGKILL);
             return;
         }
     }
 }
 
-bool TimeLimit::verify() {
+bool TimeLimit::verify_insn_limit() {
     return (perf.readInstructions() <= instruction_limit);
 }
 
