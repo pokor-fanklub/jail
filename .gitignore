@@ -3,6 +3,10 @@
 CMakeFiles/
 CMakeCache.txt
 *.cmake
-*Makefile
+/Makefile
 
 wa-jail
+
+*.test
+
+rusty/

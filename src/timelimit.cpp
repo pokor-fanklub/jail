@@ -27,7 +27,7 @@ void TimeLimit::thread_loop() {
         }
 
         // real time limit is only used as emergency limit, if process manages to block (and not increment instructions)
-        if(time(nullptr) - real_time_start > real_time_limit) {
+        if((uint64_t)time(nullptr) - real_time_start > real_time_limit) {
             killed = REAL_TIME_EXCD;
             kill(limited_pid, SIGKILL);
             return;
