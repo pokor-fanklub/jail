@@ -17,18 +17,22 @@ class Runner {
 
         void run();
 
-        static void killChild();
+        static void killNS();
     private:
-        void forkedChild();
-        void forkedMonitor();
+        void nsInitProcess();
+        void jailProcess();
+        void monitorProcess();
 
         void setPRLimits();
         void setIntHandler(bool enable);
 
         static int clone_trampoline(void* arg);
         void _setPRLimit(__rlimit_resource resource, uint64_t limit);
+        int getRealJailPid();
         
-        pid_t child_pid = -1;
+        pid_t ns_init_pid = -1;
+        pid_t jail_pid = -1;
+        int monitor_init_pipe[2] = {-1, -1};
         std::string exec_name;
         std::vector<std::string> exec_args;
         limits rlimits;
