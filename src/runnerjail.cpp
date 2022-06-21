@@ -70,6 +70,8 @@ void RunnerJail::jail_main() {
     for(size_t i = 0; i < exec_args.size(); i++)
         c_argv[i+1] = exec_args[i].c_str();
     c_argv[2] = nullptr;
+    
+    raise(SIGSTOP); // signal tracer that setup is done and all signals from now belong to process
 
     execv("/exe", (char * const *) c_argv);
     jail::panic("jail: execv failed");

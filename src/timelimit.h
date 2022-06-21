@@ -21,14 +21,16 @@ class TimeLimit {
 
         std::thread attach();
         bool verify_insn_limit();
+        void start_real_time_limit();
         std::atomic<KillReason>& get_killed() { return killed; };
     private:
         pid_t limited_pid;
         uint64_t instruction_limit;
         uint64_t real_time_limit;
         Perf& perf;
-        std::atomic<KillReason> killed {NONE};
-        time_t real_time_start;
+        std::atomic <KillReason> killed {NONE};
+        std::atomic <bool> real_time_enabled {false};
+        std::atomic <time_t> real_time_start;
 
         void thread_loop();
 };

@@ -7,12 +7,6 @@
 #include <sys/wait.h>
 #include <sys/ptrace.h>
 #include <sys/user.h>
-#include <sys/resource.h>
-#include <assert.h>
-#include <syscall.h>
-#include <sys/mount.h>
-#include <sys/mman.h>
-#include <sys/prctl.h>
 #include <fcntl.h>
 #include <sstream>
 #include <fstream>
@@ -25,21 +19,26 @@ namespace jail {
 
 
 void Runner::run() {
-    int rc = pipe2(monitor_init_pipe, O_CLOEXEC); // create pipe to send child pid from pid_ns_init process
+    // create pipe to send child pid from pid_ns_init process
+    int pipe_fds[2];
+    int rc = pipe2(pipe_fds, O_CLOEXEC); 
     if(rc < 0)
         jail::panic("pipe2 failed");
     
-    RunnerJail jail(monitor_init_pipe[1], exec_name, exec_args, seccomp, jail_uid, jail_gid);
+    RunnerJail jail(pipe_fds[1], exec_name, exec_args, seccomp, jail_uid, jail_gid);
+    Runner::pid_pipe_fd = pipe_fds[0];
 
     char* stack = (char*)malloc(1024*1024);
     int pid = clone(jail.init_clone_trampoline, stack+(1024*1024), SIGCHLD|CLONE_NEWNS|CLONE_NEWNET|CLONE_NEWIPC|CLONE_NEWPID, &jail);
     if(pid < 0)
         jail::panic("clone failed");
 
-    std::cout<<"pid"<<pid<<'\n';
+    std::cout<<"init pid: "<<pid<<'\n';
     Runner::ns_init_pid = pid;
     static_ns_init_pid = pid;
+
     monitorProcess();
+    
     free(stack);
 }
 
@@ -54,7 +53,6 @@ void Runner::setPRLimits() {
     _setPRLimit(RLIMIT_AS, Runner::rlimits.total_memory_kb*1024);
     _setPRLimit(RLIMIT_STACK, Runner::rlimits.stack_kb*1024);
     _setPRLimit(RLIMIT_FSIZE, Runner::rlimits.per_file_kb*1024);
-    _setPRLimit(RLIMIT_NOFILE, Runner::rlimits.open_files);
     _setPRLimit(RLIMIT_MEMLOCK, 0);
     _setPRLimit(RLIMIT_CPU, Runner::rlimits.real_time);    
 }
@@ -62,116 +60,158 @@ void Runner::setPRLimits() {
 void Runner::monitorProcess() {
     setIntHandler(true);
 
-    assert(!close(monitor_init_pipe[1]));
-    pid_t jpid;
-    int r = read(monitor_init_pipe[0], &jpid, sizeof(jpid));
-    if(r<0)
+    // get jailed process pid from ns init process
+    pid_t jail_pid;
+    int rc  = read(Runner::pid_pipe_fd, &jail_pid, sizeof(jail_pid));
+    if(rc < 0)
         jail::panic("pipe read failed");
-   
-    std::cout<<"received pids jail: "<<jpid<<" from init:"<<Runner::ns_init_pid<<'\n';
-    Runner::jail_pid = jpid;
-    std::cout<<"resolved jail pid: "<<jail_pid<<'\n';
-
-    // FIXME: CHILD MAY DIE BEFORE THERE, print some debug in 
-    // setup TimeLimit
-    TimeLimit time_limit(Runner::jail_pid, Runner::rlimits.instructions, Runner::rlimits.real_time, Runner::perf);
-    std::thread time_limit_thread = time_limit.attach();
-
-    //setPRLimits(); //FIXME: set limits after exec
-
-    int rrc = ptrace(PTRACE_ATTACH, jail_pid);
-    if(rrc < 0)
-        printf("%m panic atttach failed %d\n", getuid());
-    int wait_s;
+    std::cout<<"received jail pid: "<<jail_pid<<'\n';
+    Runner::jail_pid = jail_pid;
     
-    // initial stop from PTRACE_TRACEME
-    pid_t rc = waitpid(Runner::jail_pid, &wait_s, 0);
-
-    if(rc < 0 || WIFSTOPPED(wait_s) != 1)
+    /* Attach to jail process. Using wait is not possible, because it is not a child.
+     * We can use attach as root to trace (and use wait) on random process.
+     * Waiting for tracer is implemented by sigstop */
+    rc = ptrace(PTRACE_ATTACH, jail_pid);
+    if(rc < 0)
+        jail::panic("ptrace attach failed");
+    
+    int wait_s; // PTRACE_ATTACH sends sigstop that needs waiting for
+    rc = waitpid(Runner::jail_pid, &wait_s, 0);
+    if(rc < 0 || WSTOPSIG(wait_s) != SIGSTOP)
         jail::panic("initial wait failed");
-    // this option creates additional event just before exit and allows to examine registers
-    // change options only when stopped
+    
     rc = ptrace(PTRACE_SETOPTIONS, Runner::jail_pid, 0, PTRACE_O_TRACEEXIT|PTRACE_O_TRACEEXEC);
     if(rc < 0)
         jail::panic("prace setoptions failed");
+    
     rc = ptrace(PTRACE_CONT, Runner::jail_pid, 0, 0);
-
-    // debug sig 6 
     if(rc < 0)
         jail::panic("initial ptrace_cont failed");
-    std::cout<<"resuming after initial stop\n";
+    
+    std::cout<<"resuming process\n";
 
-    int wait_ignore = 1;
+    TimeLimit time_limit(Runner::jail_pid, Runner::rlimits.instructions, Runner::rlimits.real_time, Runner::perf);
+    std::thread time_limit_thread = time_limit.attach();
+    // set all limits except file limit, which is enabled on exec
+    setPRLimits();
 
+    int before_exec = 1; // start tracing for real only after exec flag
+    int sigstop_count = 0; // 1st stop - wait for attach (start of init), 2nd stop - end of init
     for(;;) {
-        pid_t rc = waitpid(Runner::jail_pid, &wait_s, 0);
+        int wait_s;
+        int rc = waitpid(Runner::jail_pid, &wait_s, 0);
         if(rc < 0)
             jail::panic("wait failed");
         
-        if(wait_ignore) {
-            if((wait_s>>8) == (SIGTRAP | (PTRACE_EVENT_EXEC<<8)))
-                wait_ignore = 0;
-        }
+        bool should_exit = WIFEXITED(wait_s) || WIFSIGNALED(wait_s);
 
-        std::cout<<"wait status exit:"<<WIFEXITED(wait_s)<<" sig:"<<WIFSIGNALED(wait_s)<<" stop:"<<WIFSTOPPED(wait_s)<<'\n';
-        std::cout<<"codes s"<<WSTOPSIG(wait_s)<<" t"<<WTERMSIG(wait_s)<<" trace_exit"<<((wait_s>>8) == (SIGTRAP | (PTRACE_EVENT_EXIT<<8)))<<" exec"<<((wait_s>>8) == (SIGTRAP | (PTRACE_EVENT_EXEC<<8)))<<'\n';
+        bool exec_flag = ((wait_s>>8) == (SIGTRAP | (PTRACE_EVENT_EXEC<<8)));
+        bool exit_flag = ((wait_s>>8) == (SIGTRAP | (PTRACE_EVENT_EXIT<<8)));
 
-        if(!wait_ignore) {
-            rusage ru;
-            getrusage(RUSAGE_CHILDREN, &ru);
-            std::cout<<"rusage"<<ru.ru_maxrss*1024<<" realruntime"<<ru.ru_utime.tv_sec+ru.ru_stime.tv_sec<<"\n";
-        }
-        // both of those are terminating signals and don't allow PTRACE_CONT
-        if(WIFEXITED(wait_s) || WIFSIGNALED(wait_s)) {
-            if(WIFSIGNALED(wait_s))
-                std::cout<<"killed by singal!\n";
-            else
-                std::cout<<"exited normally\n";
+        if(should_exit) {
+            // terminating status, ptrace_cont is not supported
+            if(before_exec && WIFEXITED(wait_s) && WEXITSTATUS(wait_s) == 127)
+                jail::panic("jail process exited before exec call (panic 127)");
+            if(before_exec && WIFEXITED(wait_s))
+                jail::panic("jail process exited before exec call (non-panic)");
+            if(before_exec && sigstop_count <= 1 && WIFSIGNALED(wait_s))
+                jail::panic("jail process setup killed by signal");
+            
+            if (WIFEXITED(wait_s))
+                std::cout<<"exited normally with code "<<WEXITSTATUS(wait_s)<<'\n';
+            else if(before_exec && sigstop_count >= 2 && WIFSIGNALED(wait_s))
+                // after second SIGSTOP signal, we know that setup is done and the only instruction left is  
+                // exec. It may fail by ex. receiving SIGSEGV on memory limit and this is not jail error
+                std::cout<<"terminated at start of execution by signal nr."<<WTERMSIG(wait_s)<<'\n';
+            else if (WIFSIGNALED(wait_s))
+                std::cout<<"terminated by signal nr. "<<WTERMSIG(wait_s)<<'\n';
+            
             break;
         }
 
-        if(!wait_ignore) {
-            // std::stringstream proc_path;
-            // proc_path<<"/proc/"<<Runner::jail_pid<<"/status";
-            // std::ifstream proc_file(proc_path.str());
-            // std::string line;
-            // while(proc_file>>line) {
-            //     std::cout<<line<<'\n';
-            // }
-            // proc_file.close();
+        if(exec_flag && before_exec) {
+            if(sigstop_count != 2)
+                jail::panic("unexcepted number of stop signals before exec");
 
-            user_regs_struct uregs;
-            long ret = ptrace(PTRACE_GETREGS, Runner::jail_pid, 0, &uregs); // this is not available when exit status is set
-            if(ret < 0)
-                jail::panic("ptrace_getregs failed");
-            std::cout<<"regs: rax="<<uregs.rax<<" orax="<<uregs.orig_rax<<" rip(pc)="<<uregs.rip<<'\n';
+            before_exec = 0;
+            std::cout<<"exec start"<<'\n';
+
+            // setup file limit here to not interrupt setting namespace.
+            _setPRLimit(RLIMIT_NOFILE, Runner::rlimits.open_files);
+            time_limit.start_real_time_limit();
         }
 
-        int sigres = (WSTOPSIG(wait_s) == SIGTRAP || WSTOPSIG(wait_s) == SIGSTOP ? 0 : WSTOPSIG(wait_s));
-        if(sigres > 0)
-            std::cout<<"SENDSIG\n";
-        int ret = ptrace(PTRACE_CONT, Runner::jail_pid, 0, sigres);
-        if(ret < 0)
-            jail::panic("ptrace_cont failed");
-        std::cout<<"----------------------\n";
+        if(before_exec) {
+            if(WSTOPSIG(wait_s) == SIGSTOP)
+                sigstop_count++;
+            
+            std::cout<<"continue before exec ("<<WSTOPSIG(wait_s)<<")\n";
+
+            // pass all singnals execept SIGSTOP, which we use to communicate
+            int sig = (WSTOPSIG(wait_s) == SIGSTOP ? 0 : WSTOPSIG(wait_s));
+
+            // thats not always the case (think bout it)
+            rc = ptrace(PTRACE_CONT, Runner::jail_pid, 0, sig);
+            if(rc < 0)
+                jail::panic("ptrace cont failed");
+            continue;
+        }
+
+        if(exit_flag) {
+            // this is last chance to lookup registers before exit
+            user_regs_struct uregs;
+            rc = ptrace(PTRACE_GETREGS, Runner::jail_pid, 0, &uregs);
+            if(rc < 0)
+                jail::panic("ptrace_getregs failed");
+            std::cout<<"exit regs: rax="<<uregs.rax<<" orax="<<uregs.orig_rax<<" rip(pc)="<<uregs.rip<<'\n';
+            std::cout<<"mem max: "<<pidResources()<<'\n';
+        }
+
+        int fwd_signal = 0;
+        if(!exec_flag && !exit_flag) {
+            // pass all signals not generated by ptrace
+            fwd_signal = WSTOPSIG(wait_s);
+            std::cout<<"cont and forwarding signal "<<WSTOPSIG(wait_s)<<'\n';
+        } else {
+            // this signal be SIGTRAP generated by ptrace
+            std::cout<<"cont and ignoring signal\n";
+        }
+        rc = ptrace(PTRACE_CONT, Runner::jail_pid, 0, fwd_signal);
+        if(rc < 0)
+            jail::panic("ptrace cont failed");
     }
-    std::cout<<"exited with code: "<<WEXITSTATUS(wait_s)<<'\n';
-
-    rusage ru;
-    getrusage(RUSAGE_CHILDREN, &ru);
-    std::cout<<"rusage"<<ru.ru_maxrss*1024<<" realruntime"<<ru.ru_utime.tv_sec+ru.ru_stime.tv_sec<<"\n";
     
-
+    killNS(); // end init process
     setIntHandler(false);
-
     time_limit_thread.detach(); // detach timelimt thread to finish on its own
-    
+
     if(time_limit.get_killed())
-        std::cout<<"killed by tlthread\n";
-    if(time_limit.get_killed() == TimeLimit::REAL_TIME_EXCD /* || maxres cputime == limit */)
-        std::cout<<"!! Reached real time limit\n";
+        std::cout<<"Process was killed by timelimit thread: ";
+    if(time_limit.get_killed() == TimeLimit::REAL_TIME_EXCD)
+        std::cout<<"RLE (real time)\n";
     if(!time_limit.verify_insn_limit())
-        std::cout<<"tle\n";
+        std::cout<<"TLE (intstructions)\n";
+}
+
+int Runner::pidResources() {
+    // get resources usage from procfs. More accurate and allows using pid
+    std::stringstream proc_name;
+    proc_name<<"/proc/"<<Runner::jail_pid<<"/status";
+    std::ifstream proc_file(proc_name.str());
+    std::string w, res = "";
+    while (proc_file >> w) {
+        if(w == "VmPeak:") {
+            proc_file>>res;
+            break;
+        }
+    }
+
+    int mempeak = atoi(res.c_str());
+    if(!mempeak && res != "0")
+        jail::panic("failed to read from procfs");
+
+    proc_file.close();
+    return mempeak;
 }
 
 void Runner::killNS() {

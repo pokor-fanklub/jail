@@ -13,7 +13,6 @@ std::thread TimeLimit::attach() {
 }
 
 void TimeLimit::thread_loop() {
-    real_time_start = time(nullptr);
     for (;;) {
         std::this_thread::sleep_for(std::chrono::milliseconds(SAMPLING_MS));
         
@@ -27,12 +26,17 @@ void TimeLimit::thread_loop() {
         }
 
         // real time limit is only used as emergency limit, if process manages to block (and not increment instructions)
-        if((uint64_t)time(nullptr) - real_time_start > real_time_limit) {
+        if(real_time_enabled && ((uint64_t)time(nullptr) - real_time_start > real_time_limit)) {
             killed = REAL_TIME_EXCD;
             kill(limited_pid, SIGKILL);
             return;
         }
     }
+}
+
+void TimeLimit::start_real_time_limit() {
+    real_time_enabled = true;
+    real_time_start = time(nullptr);
 }
 
 bool TimeLimit::verify_insn_limit() {

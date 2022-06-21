@@ -23,12 +23,13 @@ class Runner {
 
         void setPRLimits();
         void setIntHandler(bool enable);
+        int pidResources();
 
         void _setPRLimit(__rlimit_resource resource, uint64_t limit);
         
         pid_t ns_init_pid = -1;
         pid_t jail_pid = -1;
-        int monitor_init_pipe[2] = {-1, -1};
+        int pid_pipe_fd;
         std::string exec_name;
         std::vector<std::string> exec_args;
         limits rlimits;
