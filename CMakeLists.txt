@@ -7,8 +7,10 @@ set(CMAKE_CXX_FLAGS "-Wall -Wextra -O2")
 set(sources ${sources} 
     src/log.cpp
     src/main.cpp
+    src/ns.cpp
     src/perf.cpp
     src/runner.cpp
+    src/runnerjail.cpp
     src/seccomp.cpp
     src/timelimit.cpp
 )

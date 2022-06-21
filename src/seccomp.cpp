@@ -45,7 +45,8 @@ void Seccomp::attach() {
             SYS_getpid,
             SYS_tgkill,
             SYS_rt_sigaction,
-            SYS_futex
+            SYS_futex,
+            SYS_kill
         },
         SCMP_ACT_ALLOW);
 

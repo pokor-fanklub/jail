@@ -7,7 +7,7 @@ namespace jail {
 
 void panic(std::string msg) {
     std::cerr<<"panic: "<<msg<<'\n';
-    Runner::killChild();
+    Runner::killNS();
     exit(127);
 }
 

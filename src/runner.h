@@ -19,16 +19,12 @@ class Runner {
 
         static void killNS();
     private:
-        void nsInitProcess();
-        void jailProcess();
         void monitorProcess();
 
         void setPRLimits();
         void setIntHandler(bool enable);
 
-        static int clone_trampoline(void* arg);
         void _setPRLimit(__rlimit_resource resource, uint64_t limit);
-        int getRealJailPid();
         
         pid_t ns_init_pid = -1;
         pid_t jail_pid = -1;
@@ -38,6 +34,8 @@ class Runner {
         limits rlimits;
         Perf& perf;
         Seccomp& seccomp;
+        uint jail_uid = 65534; // nobody:nogroup
+        uint jail_gid = 65534;
 };
 
 };
