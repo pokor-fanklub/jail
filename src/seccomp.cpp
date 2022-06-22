@@ -34,7 +34,7 @@ void Seccomp::attach() {
             SYS_read,
             SYS_write,
             SYS_open,
-            SYS_close, // dont allow closing files and opening other
+            SYS_close,
             SYS_uname,
             SYS_prlimit64,
             SYS_readlink,
@@ -46,7 +46,9 @@ void Seccomp::attach() {
             SYS_tgkill,
             SYS_rt_sigaction,
             SYS_futex,
-            SYS_kill
+            SYS_kill,
+            SYS_lseek,
+            SYS_close_range
         },
         SCMP_ACT_ALLOW);
 

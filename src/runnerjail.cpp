@@ -4,6 +4,7 @@
 
 #include <unistd.h>
 #include <signal.h>
+#include <fcntl.h>
 #include <fstream>
 #include <iostream>
 
@@ -56,6 +57,9 @@ void RunnerJail::jail_main() {
     // prepare jail environment
     Namespaces ns;
     ns.addMountPath({params.exec_path, "/exe", true});
+    setupFdsNs(ns);
+    for(auto ent: params.ns_ent)
+        ns.addMountPath(ent);
     ns.isolate();
     
     // drop privileges
@@ -70,11 +74,51 @@ void RunnerJail::jail_main() {
     for(size_t i = 0; i < params.exec_args.size(); i++)
         c_argv[i+1] = params.exec_args[i].c_str();
     c_argv[2] = nullptr;
+
+    // setup stdin/stout/sterr
+    changeFds();
     
     raise(SIGSTOP); // signal tracer that setup is done and all signals from now belong to process
 
     execv("/exe", (char * const *) c_argv);
     jail::panic("jail: execv failed");
+}
+
+void RunnerJail::setupFdsNs(Namespaces& ns) {
+    if(params.in_file != "") {
+        ns.addMountPath({params.in_file, "/in", true});
+    }
+    if(params.out_file != "") {
+        ns.addMountPath({params.out_file, "/out", false});
+    }
+    if(params.err_file != "") {
+        ns.addMountPath({params.err_file, "/err", false});
+    } else {
+        ns.addMountPath({"/dev/null", "/err", false});
+    }
+}
+
+void RunnerJail::changeFds() {
+    if(params.in_file != "") {
+        close(0);
+        int fd = open("/in", O_RDONLY);
+        if(fd != 0)
+            jail::panic("failed to open /in", true);
+    }
+    if(params.out_file != "") {
+        close(1);
+        int fd = open("/out", O_TRUNC|O_WRONLY);
+        if(fd != 1)
+            jail::panic("failed to open /out", true);
+    }
+    close(2);
+    int fd = open("/err", O_TRUNC|O_WRONLY);
+    if(fd != 2)
+        jail::panic("failed to open /out", true);
+    
+    int rc = close_range(3, UINT32_MAX, 0);
+    if(rc < 0)
+        jail::panic("close range failed", true);
 }
 
 int RunnerJail::getRealChildPid() {

@@ -19,6 +19,8 @@ class RunnerJail {
     private:
         void jail_main();
         int getRealChildPid();
+        void setupFdsNs(Namespaces& ns);
+        void changeFds();
 
         int pid_pipe;
         

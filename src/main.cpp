@@ -142,8 +142,8 @@ Params parseArgs(int argc, char* argv[]) {
                             break;
                         }
                         jail::Namespaces::mount_entry ent;
-                        ent.in_path = arg_s.substr(0, sep_f);
-                        ent.out_path = arg_s.substr(sep_f+1, (sep_s-sep_f-1));
+                        ent.out_path = arg_s.substr(0, sep_f);
+                        ent.in_path = arg_s.substr(sep_f+1, (sep_s-sep_f-1));
                         ent.read_only = (arg_s.substr(sep_s+1) == "rw" ? 0 : 1);
                         p.ns_ent.push_back(ent);
                         break;

@@ -24,7 +24,8 @@ void Namespaces::isolate() {
         jail_dir_path += "/";
     
     // mount tmpfs in jail directory, so we don't write any files on disk
-    SYSC(mount("none", jail_dir_path.c_str(), "tmpfs", 0, "mode=755"), "mount ympfs failed");
+    // mounting 755 with root, process can't create new files
+    SYSC(mount("none", jail_dir_path.c_str(), "tmpfs", 0, "mode=755"), "mount tmpfs failed");
     
     SYSC(mount(jail_dir_path.c_str(), jail_dir_path.c_str(), NULL, MS_BIND, NULL), "mount bind jail_dir failed");
     
@@ -32,10 +33,12 @@ void Namespaces::isolate() {
         std::string in_path = jail_dir_path + (ent.in_path[0] == '/' ? ent.in_path.substr(1) : ent.in_path);
         std::cout<<"bind mounting "<<ent.out_path<<" -> "<<in_path<<'\n';
         // create destination file (needed for bind mount)
-        int tmp_fd = open(in_path.c_str(), O_CREAT, 0666);
+
+        // we can create files with no permissions, because only mounted file permissions matter
+        createPath(in_path);
+        int tmp_fd = open(in_path.c_str(), O_CREAT, 0000);
         if(tmp_fd < 0) {
-            printf("%m ");
-            jail::panic("create mount file failed");
+            jail::panic("create mount file failed", true);
         }
         close(tmp_fd);
 
@@ -53,6 +56,30 @@ void Namespaces::isolate() {
     SYSC(syscall(SYS_pivot_root, ".", "."), "pivot_root failed");
     // unmount old root
     SYSC(umount2(".", MNT_DETACH), "umount failed");
+}
+
+void Namespaces::createPath(std::string path) {
+    if(!path.size())
+        return;
+    
+    int last_slash = (path[0] == '/' ? 0 : -1);
+    int pos = 0;
+    int dir_depth = 0;
+    while((pos = path.find('/', last_slash+1)) != -1) {
+        std::string dir_path = path.substr(0, pos);
+        std::string cur_dir = path.substr(last_slash+1, (pos-last_slash-1));
+        if(cur_dir == "..") {
+            if(--dir_depth < 0)
+                jail::panic("path points outside jail");
+        }
+        int rc = mkdir(dir_path.c_str(), 0755);
+        if(rc < 0 && errno != EEXIST) {
+            jail::panic("mkdir on path failed", true);
+        }
+        last_slash = pos;
+    }
+    if(path.substr(last_slash+1) == ".." && !dir_depth)
+        jail::panic("path points outside jail");
 }
 
 void Namespaces::addMountPath(const mount_entry& ent) {

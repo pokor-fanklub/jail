@@ -19,6 +19,8 @@ class Namespaces {
         void addMountPath(const mount_entry& entry);
 
     private:
+        void createPath(std::string path);
+
         std::string jail_dir_path = "./jail_mp";
         std::vector<mount_entry> mounts;
         
