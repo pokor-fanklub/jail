@@ -15,7 +15,7 @@ void Seccomp::addGroupRules(const std::vector<int>& syscalls, uint32_t rule) {
 }
 
 void Seccomp::attach() {
-    Seccomp::ctx = seccomp_init(SCMP_ACT_KILL_PROCESS);
+    Seccomp::ctx = seccomp_init((rules != DISABLED ? SCMP_ACT_KILL_PROCESS : SCMP_ACT_ALLOW));
     addGroupRules({
             SYS_execve,
             SYS_exit,
@@ -34,7 +34,7 @@ void Seccomp::attach() {
             SYS_read,
             SYS_write,
             SYS_open,
-            SYS_close,
+            SYS_close, // dont allow closing files and opening other
             SYS_uname,
             SYS_prlimit64,
             SYS_readlink,

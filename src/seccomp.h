@@ -9,7 +9,8 @@ namespace jail {
 class Seccomp {
     public:
         enum RuleSet {
-            STRICT
+            STRICT,
+            DISABLED
         };
 
         Seccomp(RuleSet rule_set) : rules(rule_set) {};

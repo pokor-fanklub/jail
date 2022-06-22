@@ -8,7 +8,7 @@
 #include <fcntl.h>
 #include <iostream>
 
-#define SYSC(sys, msg) if(((sys))) {printf("[%m] ");panic((msg));}
+#define SYSC(sys, msg) if(((sys))) {panic((msg), true);}
 
 namespace jail {
 
@@ -32,7 +32,7 @@ void Namespaces::isolate() {
         std::string in_path = jail_dir_path + (ent.in_path[0] == '/' ? ent.in_path.substr(1) : ent.in_path);
         std::cout<<"bind mounting "<<ent.out_path<<" -> "<<in_path<<'\n';
         // create destination file (needed for bind mount)
-        int tmp_fd = open(in_path.c_str(), O_CREAT, 0777);
+        int tmp_fd = open(in_path.c_str(), O_CREAT, 0666);
         if(tmp_fd < 0) {
             printf("%m ");
             jail::panic("create mount file failed");
@@ -53,8 +53,7 @@ void Namespaces::isolate() {
     SYSC(syscall(SYS_pivot_root, ".", "."), "pivot_root failed");
     // unmount old root
     SYSC(umount2(".", MNT_DETACH), "umount failed");
-
-    }
+}
 
 void Namespaces::addMountPath(const mount_entry& ent) {
     mounts.push_back(ent);

@@ -13,25 +13,26 @@
 
 static pid_t static_ns_init_pid = -1;
 void sigint_handler(int signo);
-extern char* our_stack;
 
 namespace jail {
-
 
 void Runner::run() {
     // create pipe to send child pid from pid_ns_init process
     int pipe_fds[2];
     int rc = pipe2(pipe_fds, O_CLOEXEC); 
     if(rc < 0)
-        jail::panic("pipe2 failed");
+        jail::panic("pipe2 failed", true);
+
+    // attach perf (only activates on exec)
+    perf.attach();
     
-    RunnerJail jail(pipe_fds[1], exec_name, exec_args, seccomp, jail_uid, jail_gid);
+    RunnerJail jail(pipe_fds[1], params, seccomp);
     Runner::pid_pipe_fd = pipe_fds[0];
 
     char* stack = (char*)malloc(1024*1024);
     int pid = clone(jail.init_clone_trampoline, stack+(1024*1024), SIGCHLD|CLONE_NEWNS|CLONE_NEWNET|CLONE_NEWIPC|CLONE_NEWPID, &jail);
     if(pid < 0)
-        jail::panic("clone failed");
+        jail::panic("clone failed", true);
 
     std::cout<<"init pid: "<<pid<<'\n';
     Runner::ns_init_pid = pid;
@@ -46,15 +47,15 @@ void Runner::_setPRLimit(__rlimit_resource resource, uint64_t limit) {
     rlimit64 rlimit = {limit, limit}; // set soft and hard limit
     int rc = prlimit64(Runner::jail_pid, resource, &rlimit, nullptr);
     if(rc < 0)
-        jail::panic("setting prlimit failed");
+        jail::panic("setting prlimit failed", true);
 }
 
 void Runner::setPRLimits() {
-    _setPRLimit(RLIMIT_AS, Runner::rlimits.total_memory_kb*1024);
-    _setPRLimit(RLIMIT_STACK, Runner::rlimits.stack_kb*1024);
-    _setPRLimit(RLIMIT_FSIZE, Runner::rlimits.per_file_kb*1024);
+    _setPRLimit(RLIMIT_AS, Runner::params.rlimits.total_memory_kb*1024);
+    _setPRLimit(RLIMIT_STACK, Runner::params.rlimits.stack_kb*1024);
+    _setPRLimit(RLIMIT_FSIZE, Runner::params.rlimits.per_file_kb*1024);
     _setPRLimit(RLIMIT_MEMLOCK, 0);
-    _setPRLimit(RLIMIT_CPU, Runner::rlimits.real_time);    
+    _setPRLimit(RLIMIT_CPU, Runner::params.rlimits.real_time);    
 }
 
 void Runner::monitorProcess() {
@@ -64,7 +65,7 @@ void Runner::monitorProcess() {
     pid_t jail_pid;
     int rc  = read(Runner::pid_pipe_fd, &jail_pid, sizeof(jail_pid));
     if(rc < 0)
-        jail::panic("pipe read failed");
+        jail::panic("pipe read failed", true);
     std::cout<<"received jail pid: "<<jail_pid<<'\n';
     Runner::jail_pid = jail_pid;
     
@@ -73,24 +74,24 @@ void Runner::monitorProcess() {
      * Waiting for tracer is implemented by sigstop */
     rc = ptrace(PTRACE_ATTACH, jail_pid);
     if(rc < 0)
-        jail::panic("ptrace attach failed");
+        jail::panic("ptrace attach failed", true);
     
     int wait_s; // PTRACE_ATTACH sends sigstop that needs waiting for
     rc = waitpid(Runner::jail_pid, &wait_s, 0);
     if(rc < 0 || WSTOPSIG(wait_s) != SIGSTOP)
-        jail::panic("initial wait failed");
+        jail::panic("initial wait failed", true);
     
     rc = ptrace(PTRACE_SETOPTIONS, Runner::jail_pid, 0, PTRACE_O_TRACEEXIT|PTRACE_O_TRACEEXEC);
     if(rc < 0)
-        jail::panic("prace setoptions failed");
+        jail::panic("prace setoptions failed", true);
     
     rc = ptrace(PTRACE_CONT, Runner::jail_pid, 0, 0);
     if(rc < 0)
-        jail::panic("initial ptrace_cont failed");
+        jail::panic("initial ptrace_cont failed", true);
     
     std::cout<<"resuming process\n";
 
-    TimeLimit time_limit(Runner::jail_pid, Runner::rlimits.instructions, Runner::rlimits.real_time, Runner::perf);
+    TimeLimit time_limit(Runner::jail_pid, Runner::params.rlimits.instructions, Runner::params.rlimits.real_time, Runner::perf);
     std::thread time_limit_thread = time_limit.attach();
     // set all limits except file limit, which is enabled on exec
     setPRLimits();
@@ -137,7 +138,7 @@ void Runner::monitorProcess() {
             std::cout<<"exec start"<<'\n';
 
             // setup file limit here to not interrupt setting namespace.
-            _setPRLimit(RLIMIT_NOFILE, Runner::rlimits.open_files);
+            _setPRLimit(RLIMIT_NOFILE, Runner::params.rlimits.open_files);
             time_limit.start_real_time_limit();
         }
 
@@ -153,7 +154,7 @@ void Runner::monitorProcess() {
             // thats not always the case (think bout it)
             rc = ptrace(PTRACE_CONT, Runner::jail_pid, 0, sig);
             if(rc < 0)
-                jail::panic("ptrace cont failed");
+                jail::panic("ptrace cont failed", true);
             continue;
         }
 
@@ -162,7 +163,7 @@ void Runner::monitorProcess() {
             user_regs_struct uregs;
             rc = ptrace(PTRACE_GETREGS, Runner::jail_pid, 0, &uregs);
             if(rc < 0)
-                jail::panic("ptrace_getregs failed");
+                jail::panic("ptrace_getregs failed", true);
             std::cout<<"exit regs: rax="<<uregs.rax<<" orax="<<uregs.orig_rax<<" rip(pc)="<<uregs.rip<<'\n';
             std::cout<<"mem max: "<<pidResources()<<'\n';
         }
@@ -178,7 +179,7 @@ void Runner::monitorProcess() {
         }
         rc = ptrace(PTRACE_CONT, Runner::jail_pid, 0, fwd_signal);
         if(rc < 0)
-            jail::panic("ptrace cont failed");
+            jail::panic("ptrace cont failed", true);
     }
     
     killNS(); // end init process
@@ -191,6 +192,7 @@ void Runner::monitorProcess() {
         std::cout<<"RLE (real time)\n";
     if(!time_limit.verify_insn_limit())
         std::cout<<"TLE (intstructions)\n";
+    std::cout<<perf.readInstructions()<<" instructions"<<'\n';
 }
 
 int Runner::pidResources() {

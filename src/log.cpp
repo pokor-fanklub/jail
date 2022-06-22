@@ -2,11 +2,15 @@
 #include "runner.h"
 
 #include <iostream>
+#include <string.h>
 
 namespace jail {
 
-void panic(std::string msg) {
-    std::cerr<<"panic: "<<msg<<'\n';
+void panic(std::string msg, bool print_errno) {
+    std::cerr<<"panic: "<<msg;
+    if(print_errno)
+        std::cerr<<" ("<<strerror(errno)<<")";
+    std::cerr<<'\n';
     Runner::killNS();
     exit(127);
 }

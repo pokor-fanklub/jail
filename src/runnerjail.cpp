@@ -55,20 +55,20 @@ void RunnerJail::jail_main() {
     
     // prepare jail environment
     Namespaces ns;
-    ns.addMountPath({exec_name, "/exe", true});
+    ns.addMountPath({params.exec_path, "/exe", true});
     ns.isolate();
     
     // drop privileges
-    setresgid(gid, gid, gid);
-    setresuid(uid, uid, uid);
+    setresgid(params.gid, params.gid, params.gid);
+    setresuid(params.uid, params.uid, params.uid);
 
     seccomp.attach();
 
     // construct arguments
-    const char* c_argv[exec_args.size()+2];
-    c_argv[0] = exec_name.c_str();
-    for(size_t i = 0; i < exec_args.size(); i++)
-        c_argv[i+1] = exec_args[i].c_str();
+    const char* c_argv[params.exec_args.size()+2];
+    c_argv[0] = params.exec_path.c_str();
+    for(size_t i = 0; i < params.exec_args.size(); i++)
+        c_argv[i+1] = params.exec_args[i].c_str();
     c_argv[2] = nullptr;
     
     raise(SIGSTOP); // signal tracer that setup is done and all signals from now belong to process

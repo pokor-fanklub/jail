@@ -4,6 +4,6 @@
 
 namespace jail {
 
-void panic(std::string msg) _GLIBCXX_NORETURN;
+void panic(std::string msg, bool print_errno=false) _GLIBCXX_NORETURN;
 
 };
