@@ -72,7 +72,7 @@ void Runner::monitorProcess() {
     /* Attach to jail process. Using wait is not possible, because it is not a child.
      * We can use attach as root to trace (and use wait) on random process.
      * Waiting for tracer is implemented by sigstop */
-    rc = ptrace(PTRACE_ATTACH, jail_pid);
+    rc = ptrace(PTRACE_SEIZE, jail_pid, 0, 0);
     if(rc < 0)
         jail::panic("ptrace attach failed", true);
     
@@ -97,7 +97,7 @@ void Runner::monitorProcess() {
     setPRLimits();
 
     int before_exec = 1; // start tracing for real only after exec flag
-    int sigstop_count = 0; // 1st stop - wait for attach (start of init), 2nd stop - end of init
+    int sigstop_count = 1; // 1st stop - wait for attach (start of init), 2nd stop - end of init
     for(;;) {
         int wait_s;
         int rc = waitpid(Runner::jail_pid, &wait_s, 0);
